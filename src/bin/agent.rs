@@ -302,6 +302,10 @@ fn spawn_shell(
                 u
             );
         }
+        // Set CMD prompt to space+backspace to act as "empty"
+        cmd.env("PROMPT", "$s$h");
+        // Disable color for modern CLI tools
+        cmd.env("NO_COLOR", "1");
         cmd
     };
 
