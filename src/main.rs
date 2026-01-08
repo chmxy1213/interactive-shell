@@ -2,13 +2,22 @@ use std::{
     io::{self, Read, Write},
     sync::mpsc,
     thread,
+    time::Duration,
 };
 
 use anyhow::Result;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::{
+    execute,
+    style::ResetColor,
+    terminal::{disable_raw_mode, enable_raw_mode},
+};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 
 fn main() -> Result<()> {
+    // 0. 提前开启 Raw Mode 并初始化终端，确保 VT 序列能被正确处理
+    enable_raw_mode()?;
+    execute!(io::stdout(), ResetColor)?;
+
     // 1. 获取当前终端大小，以便 PTY 匹配
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
 
@@ -41,9 +50,6 @@ fn main() -> Result<()> {
     // 获取 master 端的读写器
     let mut reader = pair.master.try_clone_reader()?;
     let mut writer = pair.master.take_writer()?;
-
-    // 4. 开启 Raw Mode (关键：让宿主终端直接把按键传给我们，不进行行缓冲)
-    enable_raw_mode()?;
 
     println!("Interactive shell started. Type 'exit' to quit.\r");
 
@@ -92,7 +98,22 @@ fn main() -> Result<()> {
     });
 
     // 等待任意一方结束 (通常是 shell 退出导致 reader EOF)
-    let _ = rx.recv();
+    // On Windows, the reader thread looks like it hangs on exit because
+    // the handle isn't signaled immediately or correctly.
+    // We poll the child process status to ensure we exit when it does.
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {}
+            Err(_) => break,
+        }
+
+        if let Ok(_) = rx.try_recv() {
+            break;
+        }
+
+        thread::sleep(Duration::from_millis(50));
+    }
 
     // 7. 恢复终端模式
     disable_raw_mode()?;
