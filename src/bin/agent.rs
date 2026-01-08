@@ -224,8 +224,9 @@ fn exec_command(session_id: String, command: String, timeout_ms: u64) -> AgentRe
             thread::sleep(Duration::from_millis(50));
         }
 
-        let clean_bytes = strip_ansi_escapes::strip(&captured_bytes);
-        let mut output = String::from_utf8_lossy(&clean_bytes).to_string();
+        // strip ansi字符
+        // let clean_bytes = strip_ansi_escapes::strip(&captured_bytes);
+        let mut output = String::from_utf8_lossy(&captured_bytes).to_string();
 
         // Attempt to remove the echoed command from the output to keep it clean.
         let trimmed_cmd = command.trim();
