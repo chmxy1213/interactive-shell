@@ -1,28 +1,20 @@
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, Write},
     net::TcpStream,
 };
 
 use anyhow::Result;
 use clap::Parser;
-use interactive_shell::{CommandRequest, CommandResponse};
+use interactive_shell::{AgentRequest, AgentResponse};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Command to execute on the agent
-    #[arg(short, long)]
-    command: String,
-
-    /// Timeout in milliseconds
-    #[arg(short, long, default_value_t = 5000)]
-    timeout: u64,
-
     /// Agent address
     #[arg(short, long, default_value = "127.0.0.1:1337")]
     addr: String,
 
-    /// Run as specific user (Linux/macOS only)
+    /// Initial user to switch to (e.g. root, secvision)
     #[arg(short, long)]
     user: Option<String>,
 }
@@ -30,38 +22,96 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    println!("Connecting to {}...", args.addr);
-    let mut stream = TcpStream::connect(&args.addr)?;
+    println!("Connecting to Agent at {}...", args.addr);
 
-    let req = CommandRequest {
-        command: args.command.clone(),
-        timeout_ms: args.timeout,
-        run_as_user: args.user,
-    };
+    // 1. Start Session
+    let session_id = start_session(&args.addr, args.user.clone())?;
+    println!("Session started. ID: {}", session_id);
+    println!("Type 'exit' to close session. Type commands to execute.");
 
-    let json_req = serde_json::to_string(&req)?;
-    stream.write_all(json_req.as_bytes())?;
+    // 2. REPL Loop
+    let stdin = io::stdin();
+    let mut handle = stdin.lock();
+    let mut input = String::new();
+
+    loop {
+        print!("> ");
+        io::stdout().flush()?;
+
+        input.clear();
+        if handle.read_line(&mut input)? == 0 {
+            break; // EOF
+        }
+
+        let cmd = input.trim();
+        if cmd == "exit" {
+            break;
+        }
+        if cmd.is_empty() {
+            continue;
+        }
+
+        if let Err(e) = exec_command(&args.addr, &session_id, cmd) {
+            eprintln!("Error executing command: {}", e);
+            // Maybe session is dead?
+        }
+    }
+
+    // 3. Close Session
+    close_session(&args.addr, &session_id)?;
+
+    Ok(())
+}
+
+fn send_request(addr: &str, req: AgentRequest) -> Result<AgentResponse> {
+    let mut stream = TcpStream::connect(addr)?;
+    let json = serde_json::to_string(&req)?;
+    stream.write_all(json.as_bytes())?;
     stream.write_all(b"\n")?;
-
-    println!("Sent command: {}", args.command);
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     reader.read_line(&mut line)?;
 
-    if line.trim().is_empty() {
-        println!("Error: Empty response from agent");
-        return Ok(());
+    let resp: AgentResponse = serde_json::from_str(&line)?;
+    Ok(resp)
+}
+
+fn start_session(addr: &str, user: Option<String>) -> Result<String> {
+    let req = AgentRequest::StartSession { user };
+    let resp = send_request(addr, req)?;
+    if !resp.success {
+        return Err(anyhow::anyhow!("Start failed: {:?}", resp.error));
+    }
+    resp.session_id
+        .ok_or_else(|| anyhow::anyhow!("No session ID returned"))
+}
+
+fn exec_command(addr: &str, session_id: &str, cmd: &str) -> Result<()> {
+    let req = AgentRequest::ExecCommand {
+        session_id: session_id.to_string(),
+        command: cmd.to_string(),
+        timeout_ms: 3000, // Default 3s waiting for output per chunk
+    };
+    let resp = send_request(addr, req)?;
+
+    if !resp.success {
+        eprintln!("Remote Error: {:?}", resp.error);
     }
 
-    let resp: CommandResponse = serde_json::from_str(&line)?;
+    // Print output directly
+    if !resp.output.is_empty() {
+        print!("{}", resp.output);
+    }
 
-    println!("--- Execution Result ---");
-    println!("Timed out: {}", resp.timed_out);
-    println!("Exit code: {:?}", resp.exit_code);
-    println!("Output received ({} bytes):", resp.output.len());
-    println!("------------------------");
-    println!("{}", resp.output);
+    Ok(())
+}
 
+fn close_session(addr: &str, session_id: &str) -> Result<()> {
+    let req = AgentRequest::CloseSession {
+        session_id: session_id.to_string(),
+    };
+    let _ = send_request(addr, req)?;
+    println!("Session closed.");
     Ok(())
 }

@@ -1,15 +1,26 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct CommandRequest {
-    pub command: String,
-    pub timeout_ms: u64,
-    pub run_as_user: Option<String>,
+#[serde(tag = "action")] // Use tagged enum for better JSON: {"action": "StartSession", ...}
+pub enum AgentRequest {
+    StartSession {
+        user: Option<String>,
+    },
+    ExecCommand {
+        session_id: String,
+        command: String,
+        timeout_ms: u64,
+    },
+    CloseSession {
+        session_id: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct CommandResponse {
-    pub timed_out: bool,
-    pub exit_code: Option<i32>, // None if killed or signal
+pub struct AgentResponse {
+    pub success: bool,
+    pub session_id: Option<String>,
     pub output: String,
+    pub exit_code: Option<i32>,
+    pub error: Option<String>,
 }
