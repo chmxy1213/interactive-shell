@@ -21,6 +21,10 @@ struct Args {
     /// Agent address
     #[arg(short, long, default_value = "127.0.0.1:1337")]
     addr: String,
+
+    /// Run as specific user (Linux/macOS only)
+    #[arg(short, long)]
+    user: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -32,6 +36,7 @@ fn main() -> Result<()> {
     let req = CommandRequest {
         command: args.command.clone(),
         timeout_ms: args.timeout,
+        run_as_user: args.user,
     };
 
     let json_req = serde_json::to_string(&req)?;

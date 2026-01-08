@@ -65,16 +65,45 @@ fn execute_command(req: CommandRequest) -> Result<CommandResponse> {
 
     // Wrap command in shell to properly execute command line strings
     #[cfg(target_os = "windows")]
-    let mut cmd = CommandBuilder::new("cmd");
-    #[cfg(target_os = "windows")]
-    cmd.args(&["/C", &req.command]);
+    let cmd = {
+        let mut cmd = CommandBuilder::new("cmd");
+        if let Some(user) = &req.run_as_user {
+            // Windows 'runas' requires interaction or saved credentials,
+            // which is hard to automate in this simple architecture.
+            // For now, we log a warning and run as current user.
+            eprintln!(
+                "Warning: run_as_user '{}' ignored on Windows. Running as current user.",
+                user
+            );
+        }
+        cmd.args(&["/C", &req.command]);
+        cmd
+    };
 
     #[cfg(not(target_os = "windows"))]
-    let mut cmd = CommandBuilder::new("bash");
-    #[cfg(not(target_os = "windows"))]
-    cmd.args(&["-c", &req.command]);
+    let cmd = {
+        if let Some(user) = &req.run_as_user {
+            // Use 'su' to switch user.
+            // -l (login shell) is optional but good for env.
+            // -c passes the command.
+            // Note: This requires the agent to run as root (or have sudo NOPASSWD).
+            let mut cmd = CommandBuilder::new("su");
+            cmd.args(&["-", user, "-c", &req.command]);
+            cmd
+        } else {
+            let mut cmd = CommandBuilder::new("bash");
+            cmd.args(&["-c", &req.command]);
+            cmd
+        }
+    };
 
     // Avoid ANSI codes if possible (though strip-ansi-escapes is better)
+    // We cannot set env on 'cmd' if it was moved, so we need to construct it mutably above
+    // or set env on the builder before finalization.
+    // Correction: CommandBuilder IS mutable.
+
+    // Re-apply env TERM=dumb to the construct command builder
+    let mut cmd = cmd;
     cmd.env("TERM", "dumb");
 
     let mut child = pair.slave.spawn_command(cmd)?;

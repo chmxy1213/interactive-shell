@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct CommandRequest {
     pub command: String,
     pub timeout_ms: u64,
+    pub run_as_user: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
